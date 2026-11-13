@@ -24,11 +24,22 @@ c_srv = st.sidebar.number_input("Costo por servidor (miles de pesos/mes)", 50.0,
 n_max = st.sidebar.number_input("Espacio del centro de datos (servidores)", 5, 40, 20, 1)
 st.sidebar.header("Punto a analizar")
 t_sel = st.sidebar.slider("Semana t", 0.0, 15.0, 4.0, 0.5)
-x_sel = st.sidebar.slider("Usuarios x (miles) para T y T*", 4.5, float(K), 6.0, 0.5)
+x_sel = st.sidebar.slider("Usuarios x (miles) para T y T*", 1.0, float(K), 6.0, 0.01, format="%.2f")
 n_sel = st.sidebar.slider("Servidores n", 1, int(n_max), 7, 1)
 st.sidebar.header("Umbrales de la zona de decisión")
 alerta = st.sidebar.slider("Alerta de capacidad (% de K)", 50, 100, 80, 5)
 tol = st.sidebar.slider("Tolerancia de costo sobre el mínimo (%)", 0, 10, 2, 1)
+
+# ------------------------------------------------------------------ Validez de la versión original en x
+EN_4 = abs(x_sel - 4) < 1e-9          # x = 4: asíntota de T (división entre cero)
+T_VALIDA = x_sel > 4 and not EN_4     # T solo describe la operación por encima de 4 mil usuarios
+
+def txt_dT(x):
+    if abs(x - 4) < 1e-9:
+        return "no definida (x = 4)"
+    if x < 4:
+        return "fuera de rango (x < 4)"
+    return f"{m.dT(x):.2f} s/mil"
 
 # ------------------------------------------------------------------ Cálculos
 t_star = m.t_inflexion(K, r, a)
@@ -59,7 +70,7 @@ with tab1:
     c3.metric("Servidores óptimos", f"{n_opt}", f"n* = {n_crit:.2f}", delta_color="off")
     c4.metric("Costo mínimo", f"${c_min:,.1f} mil/mes")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("T'(x) con x elegido", f"{m.dT(x_sel):.2f} s/mil")
+    c1.metric("T'(x) con x elegido", txt_dT(x_sel))
     c2.metric("T*'(x) con x elegido", f"{m.dTs(x_sel):.3f} s/mil")
     c3.metric("x(t) en la semana elegida", f"{m.x_t(t_sel, K, r, a):.2f} mil")
     c4.metric("dT*/dt en la semana elegida", f"{m.dTs_dt(t_sel, K, r, a):.3f} s/sem")
@@ -106,18 +117,36 @@ with tab2:
     f1.add_hline(y=1, line_dash="dot", line_color=AZUL, annotation_text="tope T* → 1 s")
     f1.add_scatter(x=[4], y=[2], mode="markers", name="hueco T*(4) = 2",
                    marker=dict(symbol="circle-open", size=12, color=ACENTO, line=dict(width=2)))
+    if T_VALIDA:
+        f1.add_scatter(x=[x_sel], y=[m.T(x_sel)], mode="markers", name="T en x elegido",
+                       marker=dict(color=AZUL_OSC, size=11))
+    if not EN_4:
+        f1.add_scatter(x=[x_sel], y=[m.Ts(x_sel)], mode="markers", name="T* en x elegido",
+                       marker=dict(color=AZUL, size=11))
     f1.update_yaxes(range=[0, 20])
     st.plotly_chart(base(f1, "Tiempo de respuesta", "x (miles de usuarios)", "T (s)"), use_container_width=True)
     f2 = go.Figure()
     f2.add_scatter(x=xt_, y=[m.dT(v) for v in xt_], name="T'(x)", line=dict(color=AZUL_OSC, width=3))
     f2.add_scatter(x=xo, y=[m.dTs(v) for v in xo], name="T*'(x)", line=dict(color=AZUL_CLARO, width=3))
-    f2.add_scatter(x=[x_sel, x_sel], y=[m.dT(x_sel), m.dTs(x_sel)], mode="markers", name="x elegido",
+    ys_sel = [m.dT(x_sel), m.dTs(x_sel)] if T_VALIDA else [m.dTs(x_sel)]
+    f2.add_scatter(x=[x_sel] * len(ys_sel), y=ys_sel, mode="markers", name="x elegido",
                    marker=dict(color=ACENTO, size=11))
     f2.update_yaxes(range=[-60, 2])
     st.plotly_chart(base(f2, "Derivadas: ritmo de cambio del tiempo", "x (miles de usuarios)", "dT/dx (s por mil usuarios)"),
                     use_container_width=True)
-    st.info(f"Con x = {x_sel:.1f} mil: T' = {m.dT(x_sel):.2f} y T*' = {m.dTs(x_sel):.3f} s por mil usuarios; "
-            f"la original es {abs(m.dT(x_sel) / m.dTs(x_sel)):.0f} veces más sensible.")
+    if T_VALIDA:
+        st.info(f"Con x = {x_sel:.2f} mil: T = {m.T(x_sel):.2f} s y T* = {m.Ts(x_sel):.2f} s; "
+                f"T' = {m.dT(x_sel):.2f} y T*' = {m.dTs(x_sel):.3f} s por mil usuarios; "
+                f"la original es {abs(m.dT(x_sel) / m.dTs(x_sel)):.0f} veces más sensible.")
+    elif EN_4:
+        st.warning("Con x = 4,00 mil: la versión original T(x) no está definida (división entre cero): "
+                   "es la asíntota vertical, el tiempo crece sin control. La fórmula de T* da 0/0 "
+                   "(indeterminada), pero los valores a ambos lados se acercan a 2 s: lim T*(x) = 2 s "
+                   "(el hueco naranja), y T*'(4) = −0,25 s por mil usuarios.")
+    else:
+        st.warning(f"Con x = {x_sel:.2f} mil: la versión original daría T = {m.T(x_sel):.2f} s, un tiempo "
+                   f"negativo sin sentido; T(x) solo vale por encima de 4 mil usuarios. "
+                   f"La versión nueva sí funciona: T* = {m.Ts(x_sel):.2f} s y T*' = {m.dTs(x_sel):.3f} s por mil usuarios.")
 
 # ------------------------------------------------------------------ Pestaña 3: x(t)
 with tab3:
@@ -194,3 +223,4 @@ with tab6:
     st.latex(r"C(n)=120n+\frac{4800+200k}{n},\quad C'(n)=120-\frac{4800+200k}{n^2},\quad n^*=\sqrt{\frac{4800+200k}{120}}")
     st.subheader("Código del modelo (modelo.py)")
     st.code(inspect.getsource(m), language="python")
+
